@@ -123,6 +123,16 @@ SCENE_BLOCKS_XML = """\
 ARM_POS = [0.2, -0.18, 0.21]
 ARM_QUAT = [0.707107, 0, 0, 0.707107]
 
+# Home position: arm folded upright, ready to reach the table
+HOME_JOINTS = {
+    "shoulder_pan": 0,
+    "shoulder_lift": -1.75,
+    "elbow_flex": 1.69,
+    "wrist_flex": 1.08,
+    "wrist_roll": 0,
+    "gripper": 0,
+}
+
 
 def generate_scene():
     """Write scene_blocks.xml into the SO101 directory."""
@@ -132,11 +142,24 @@ def generate_scene():
 
 
 def load_model(scene_path):
-    """Load scene and position the arm on the table via MjSpec."""
+    """Load scene, position the arm on the table, and set home keyframe."""
     spec = mujoco.MjSpec.from_file(str(scene_path))
     base = spec.body("base")
     base.pos = ARM_POS
     base.quat = ARM_QUAT
+
+    # Add a "home" keyframe so the sim starts in the rest pose
+    model = spec.compile()
+    key = spec.add_key()
+    key.name = "home"
+    data = mujoco.MjData(model)
+    for name, val in HOME_JOINTS.items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        qadr = model.jnt_qposadr[jid]
+        data.qpos[qadr] = val
+    key.qpos = data.qpos
+    key.ctrl = [HOME_JOINTS[model.actuator(i).name] for i in range(model.nu)]
+
     return spec.compile()
 
 
@@ -146,6 +169,9 @@ def main():
     print(f"Loading {scene_path}")
     model = load_model(scene_path)
     data = mujoco.MjData(model)
+    # Reset to home keyframe
+    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
+    mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.viewer.launch(model, data)
 
 
