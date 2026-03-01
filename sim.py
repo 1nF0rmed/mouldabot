@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """SO-101 MuJoCo simulation: arm + table + 3 colored blocks."""
 
-import argparse
-import platform
 import urllib.request
 from pathlib import Path
 
@@ -166,15 +164,7 @@ def load_model(scene_path):
     return spec.compile()
 
 
-BLOCK_ALIASES = {
-    "red": "red_block",
-    "green": "green_block",
-    "blue": "blue_block",
-}
-
-
-def _setup():
-    """Common setup: download assets, generate scene, load model, reset to home."""
+def main():
     download_assets()
     scene_path = generate_scene()
     print(f"Loading {scene_path}")
@@ -182,71 +172,7 @@ def _setup():
     data = mujoco.MjData(model)
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
-    return model, data
-
-
-def _interactive_loop(model, data, viewer):
-    """Read commands from stdin and execute pick/place actions."""
-    from control import pick_up, place, go_home
-
-    print("\n--- Interactive mode ---")
-    print("Commands:")
-    print("  pick red|green|blue  — pick up a block")
-    print("  place <x> <y>       — place held block at (x, y)")
-    print("  home                — return to home position")
-    print("  quit                — exit\n")
-
-    while viewer.is_running():
-        try:
-            cmd = input(">>> ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            break
-        if not cmd:
-            continue
-
-        parts = cmd.split()
-        verb = parts[0]
-
-        if verb == "quit":
-            break
-        elif verb == "home":
-            go_home(model, data, viewer)
-        elif verb == "pick" and len(parts) == 2:
-            colour = parts[1]
-            block = BLOCK_ALIASES.get(colour)
-            if block is None:
-                print(f"Unknown block '{colour}'. Use: red, green, blue")
-                continue
-            pick_up(model, data, block, viewer)
-        elif verb == "place" and len(parts) == 3:
-            try:
-                x, y = float(parts[1]), float(parts[2])
-            except ValueError:
-                print("Usage: place <x> <y>  (floats)")
-                continue
-            place(model, data, [x, y], viewer)
-        else:
-            print("Unknown command. Try: pick <color>, place <x> <y>, home, quit")
-
-    viewer.close()
-
-
-def main():
-    parser = argparse.ArgumentParser(description="SO-101 MuJoCo simulation")
-    parser.add_argument("--interactive", action="store_true",
-                        help="Open viewer and prompt for pick/place commands")
-    args = parser.parse_args()
-
-    model, data = _setup()
-
-    if args.interactive:
-        if platform.system() == "Darwin":
-            print("NOTE: On macOS, interactive mode requires mjpython.")
-            print("Run:  .venv/bin/mjpython sim.py --interactive\n")
-        with mujoco.viewer.launch_passive(model, data) as viewer:
-            _interactive_loop(model, data, viewer)
-    else:
-        mujoco.viewer.launch(model, data)
+    mujoco.viewer.launch(model, data)
 
 
 if __name__ == "__main__":
