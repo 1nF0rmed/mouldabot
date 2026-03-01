@@ -79,6 +79,7 @@ SCENE_BLOCKS_XML = """\
 
   <worldbody>
     <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
+    <camera name="top_down" pos="0.2 0 0.8" xyaxes="1 0 0 0 1 0" fovy="60" />
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" />
 
     <!-- Table: 60x40cm surface, 20cm tall -->
