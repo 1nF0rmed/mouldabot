@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SO-101 MuJoCo simulation: arm + table + 3 colored blocks."""
 
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -135,6 +136,37 @@ HOME_JOINTS = {
 }
 
 
+# Grasp positions for each block — fill in after manual tuning
+GRASP_CONFIGS = {
+    "red_block": {
+        "shoulder_pan": -0.4992,
+        "shoulder_lift": -0.0173,
+        "elbow_flex": 0.4226,
+        "wrist_flex": 1.3264,
+        "wrist_roll": 1.1802,
+        "gripper": 0.5262,
+    },
+    "green_block": {
+        "shoulder_pan": -0.0,
+        "shoulder_lift": 0.1921,
+        "elbow_flex": 0.1522,
+        "wrist_flex": 1.5088,
+        "wrist_roll": 0.0,
+        "gripper": 0.4782,
+    },
+    "blue_block": {
+        "shoulder_pan": 0.4992,
+        "shoulder_lift": -0.0173,
+        "elbow_flex": 0.4226,
+        "wrist_flex": 1.3264,
+        "wrist_roll": -1.1802,
+        "gripper": 0.5262,
+    },
+}
+
+JOINT_NAMES = list(HOME_JOINTS.keys())
+
+
 def generate_scene():
     """Write scene_blocks.xml into the SO101 directory."""
     scene_path = LOCAL_DIR / "scene_blocks.xml"
@@ -164,6 +196,51 @@ def load_model(scene_path):
     return spec.compile()
 
 
+def apply_joints(model, data, joint_dict):
+    """Set qpos and ctrl for the given joint dictionary."""
+    for name, val in joint_dict.items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        data.qpos[model.jnt_qposadr[jid]] = val
+    for i in range(model.nu):
+        aname = model.actuator(i).name
+        if aname in joint_dict:
+            data.ctrl[i] = joint_dict[aname]
+
+
+def command_loop(pending_cmd):
+    """Read stdin commands and queue them for the sim loop."""
+    print("Commands:  pos  |  final <block_name>  |  home  |  quit")
+    while True:
+        try:
+            line = input("> ").strip()
+        except EOFError:
+            break
+        if not line:
+            continue
+        parts = line.split()
+        cmd = parts[0].lower()
+
+        if cmd == "pos":
+            pending_cmd.append(("pos", None, None))
+        elif cmd == "final" and len(parts) == 2:
+            block = parts[1]
+            # Allow shorthand: "red" -> "red_block"
+            if not block.endswith("_block"):
+                block = f"{block}_block"
+            cfg = GRASP_CONFIGS.get(block)
+            if cfg is None:
+                print(f"No grasp config for '{block}' (not tuned yet)")
+            else:
+                pending_cmd.append(("final", block, cfg))
+        elif cmd == "home":
+            pending_cmd.append(("home", None, HOME_JOINTS))
+        elif cmd == "quit":
+            pending_cmd.append(("quit", None, None))
+            break
+        else:
+            print("Unknown command. Use: pos | final <block_name> | home | quit")
+
+
 def main():
     download_assets()
     scene_path = generate_scene()
@@ -172,7 +249,34 @@ def main():
     data = mujoco.MjData(model)
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
-    mujoco.viewer.launch(model, data)
+
+    pending_cmd = []
+    cmd_thread = threading.Thread(
+        target=command_loop, args=(pending_cmd,), daemon=True
+    )
+    cmd_thread.start()
+
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        while viewer.is_running():
+            # Process pending commands
+            while pending_cmd:
+                action, block, joints = pending_cmd.pop(0)
+                if action == "quit":
+                    viewer.close()
+                    return
+                if action == "pos":
+                    angles = {}
+                    for name in JOINT_NAMES:
+                        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+                        angles[name] = round(data.qpos[model.jnt_qposadr[jid]], 4)
+                    print(f"joints: {angles}")
+                else:
+                    apply_joints(model, data, joints)
+                    label = block if block else "home"
+                    print(f"Applied '{label}' joint config")
+
+            mujoco.mj_step(model, data)
+            viewer.sync()
 
 
 if __name__ == "__main__":
