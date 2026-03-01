@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """SO-101 MuJoCo simulation: arm + table + 3 colored blocks."""
 
-import os
 import urllib.request
 from pathlib import Path
 
@@ -97,21 +96,21 @@ SCENE_BLOCKS_XML = """\
     </body>
 
     <!-- Block 1: red -->
-    <body name="red_block" pos="0.15 -0.05 0.23">
+    <body name="red_block" pos="0.1 0.0 0.23">
       <freejoint />
       <geom name="red_block" type="box" size="0.02 0.02 0.02"
             material="red_block" mass="0.05" />
     </body>
 
     <!-- Block 2: green -->
-    <body name="green_block" pos="0.2 0.0 0.23">
+    <body name="green_block" pos="0.2 0.05 0.23">
       <freejoint />
       <geom name="green_block" type="box" size="0.02 0.02 0.02"
             material="green_block" mass="0.05" />
     </body>
 
     <!-- Block 3: blue -->
-    <body name="blue_block" pos="0.25 0.05 0.23">
+    <body name="blue_block" pos="0.3 0.0 0.23">
       <freejoint />
       <geom name="blue_block" type="box" size="0.02 0.02 0.02"
             material="blue_block" mass="0.05" />
@@ -121,6 +120,10 @@ SCENE_BLOCKS_XML = """\
 """
 
 
+ARM_POS = [0.2, -0.18, 0.21]
+ARM_QUAT = [0.707107, 0, 0, 0.707107]
+
+
 def generate_scene():
     """Write scene_blocks.xml into the SO101 directory."""
     scene_path = LOCAL_DIR / "scene_blocks.xml"
@@ -128,11 +131,20 @@ def generate_scene():
     return scene_path
 
 
+def load_model(scene_path):
+    """Load scene and position the arm on the table via MjSpec."""
+    spec = mujoco.MjSpec.from_file(str(scene_path))
+    base = spec.body("base")
+    base.pos = ARM_POS
+    base.quat = ARM_QUAT
+    return spec.compile()
+
+
 def main():
     download_assets()
     scene_path = generate_scene()
     print(f"Loading {scene_path}")
-    model = mujoco.MjModel.from_xml_path(str(scene_path))
+    model = load_model(scene_path)
     data = mujoco.MjData(model)
     mujoco.viewer.launch(model, data)
 
