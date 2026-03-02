@@ -220,21 +220,32 @@ def make_safe_trajectory(current, target, target_name="home", steps_per_seg=80):
     """Build a multi-segment trajectory that lifts above the table before panning.
 
     Phases:
-      1. Lift  — current -> raised (preserve current shoulder_pan & gripper)
-      2. Pan   — raised (current pan) -> raised (target pan & wrist_roll)
-      3. Lower — raised -> pre-grasp (block targets) or -> target (home)
-      4. Descend — pre-grasp -> target (block targets only)
+      1a. Retract — curl wrist & elbow up first (shoulder stays put)
+      1b. Lift   — raise shoulder to full transit height
+      2.  Pan    — rotate to target shoulder_pan while raised
+      3.  Lower  — raised -> pre-grasp (block targets) or -> target (home)
+      4.  Descend — pre-grasp -> target (block targets only)
     """
     gripper_val = current["gripper"]
     trajectory = []
 
     # --- Phase 1: Lift (skip if arm is already raised) ---
+    # Retract distal joints first (gripper-end), then move shoulder.
+    # This prevents the forearm from sweeping through nearby blocks.
     if not is_arm_raised(current):
+        # Phase 1a: retract wrist & elbow while keeping shoulder in place
+        retracted = dict(current)
+        retracted["wrist_flex"] = RAISED_JOINTS["wrist_flex"]
+        retracted["elbow_flex"] = RAISED_JOINTS["elbow_flex"]
+        retracted["gripper"] = gripper_val
+        trajectory.extend(make_motion_steps(current, retracted, steps=steps_per_seg))
+
+        # Phase 1b: now lift the shoulder to full raised position
         raised_start = dict(RAISED_JOINTS)
         raised_start["shoulder_pan"] = current["shoulder_pan"]
         raised_start["wrist_roll"] = current["wrist_roll"]
         raised_start["gripper"] = gripper_val
-        trajectory.extend(make_motion_steps(current, raised_start, steps=steps_per_seg))
+        trajectory.extend(make_motion_steps(retracted, raised_start, steps=steps_per_seg))
         phase2_start = raised_start
     else:
         phase2_start = dict(current)
