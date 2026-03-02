@@ -167,6 +167,27 @@ GRASP_CONFIGS = {
 JOINT_NAMES = list(HOME_JOINTS.keys())
 
 
+def get_current_joints(model, data):
+    """Read current joint positions from data.qpos for all joints."""
+    result = {}
+    for name in JOINT_NAMES:
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        result[name] = data.qpos[model.jnt_qposadr[jid]]
+    return result
+
+
+def make_motion_steps(current, target, steps=200):
+    """Linear interpolation from current to target joint dicts."""
+    trajectory = []
+    for i in range(steps):
+        t = (i + 1) / steps
+        step = {}
+        for name in JOINT_NAMES:
+            step[name] = current[name] + t * (target[name] - current[name])
+        trajectory.append(step)
+    return trajectory
+
+
 def generate_scene():
     """Write scene_blocks.xml into the SO101 directory."""
     scene_path = LOCAL_DIR / "scene_blocks.xml"
@@ -251,6 +272,7 @@ def main():
     mujoco.mj_resetDataKeyframe(model, data, key_id)
 
     pending_cmd = []
+    motion_queue = []
     cmd_thread = threading.Thread(
         target=command_loop, args=(pending_cmd,), daemon=True
     )
@@ -265,15 +287,23 @@ def main():
                     viewer.close()
                     return
                 if action == "pos":
-                    angles = {}
-                    for name in JOINT_NAMES:
-                        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-                        angles[name] = round(data.qpos[model.jnt_qposadr[jid]], 4)
+                    angles = {k: round(v, 4) for k, v in get_current_joints(model, data).items()}
                     print(f"joints: {angles}")
                 else:
-                    apply_joints(model, data, joints)
+                    # Interrupt any in-progress motion and start fresh
+                    current = get_current_joints(model, data)
+                    motion_queue.clear()
+                    motion_queue.extend(make_motion_steps(current, joints))
                     label = block if block else "home"
-                    print(f"Applied '{label}' joint config")
+                    print(f"Moving to '{label}' ({len(motion_queue)} steps)")
+
+            # Apply next motion step if queued
+            if motion_queue:
+                step = motion_queue.pop(0)
+                for i in range(model.nu):
+                    aname = model.actuator(i).name
+                    if aname in step:
+                        data.ctrl[i] = step[aname]
 
             mujoco.mj_step(model, data)
             viewer.sync()
