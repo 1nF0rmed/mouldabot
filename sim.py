@@ -135,6 +135,17 @@ HOME_JOINTS = {
     "gripper": 0,
 }
 
+# Raised transit configuration: arm above table height so pan rotation clears blocks.
+# shoulder_pan and gripper are overridden dynamically per-move.
+RAISED_JOINTS = {
+    "shoulder_pan": 0,
+    "shoulder_lift": -1.0,
+    "elbow_flex": 1.2,
+    "wrist_flex": 0.8,
+    "wrist_roll": 0,
+    "gripper": 0,
+}
+
 
 # Grasp positions for each block — fill in after manual tuning
 GRASP_CONFIGS = {
@@ -185,6 +196,67 @@ def make_motion_steps(current, target, steps=200):
         for name in JOINT_NAMES:
             step[name] = current[name] + t * (target[name] - current[name])
         trajectory.append(step)
+    return trajectory
+
+
+def make_pre_grasp(grasp):
+    """Derive an approach-from-above config from a grasp config.
+
+    Pulls shoulder_lift back ~0.3 rad and tucks elbow_flex +0.15 rad so the
+    final descent to the block is roughly vertical.
+    """
+    pre = dict(grasp)
+    pre["shoulder_lift"] = grasp["shoulder_lift"] - 0.3
+    pre["elbow_flex"] = grasp["elbow_flex"] + 0.15
+    return pre
+
+
+def is_arm_raised(joints):
+    """Return True if the arm is already above table height (e.g. at HOME)."""
+    return joints["shoulder_lift"] < -0.6
+
+
+def make_safe_trajectory(current, target, target_name="home", steps_per_seg=80):
+    """Build a multi-segment trajectory that lifts above the table before panning.
+
+    Phases:
+      1. Lift  — current -> raised (preserve current shoulder_pan & gripper)
+      2. Pan   — raised (current pan) -> raised (target pan & wrist_roll)
+      3. Lower — raised -> pre-grasp (block targets) or -> target (home)
+      4. Descend — pre-grasp -> target (block targets only)
+    """
+    gripper_val = current["gripper"]
+    trajectory = []
+
+    # --- Phase 1: Lift (skip if arm is already raised) ---
+    if not is_arm_raised(current):
+        raised_start = dict(RAISED_JOINTS)
+        raised_start["shoulder_pan"] = current["shoulder_pan"]
+        raised_start["wrist_roll"] = current["wrist_roll"]
+        raised_start["gripper"] = gripper_val
+        trajectory.extend(make_motion_steps(current, raised_start, steps=steps_per_seg))
+        phase2_start = raised_start
+    else:
+        phase2_start = dict(current)
+
+    # --- Phase 2: Pan to target shoulder_pan while raised ---
+    raised_end = dict(RAISED_JOINTS)
+    raised_end["shoulder_pan"] = target["shoulder_pan"]
+    raised_end["wrist_roll"] = target["wrist_roll"]
+    raised_end["gripper"] = gripper_val
+    trajectory.extend(make_motion_steps(phase2_start, raised_end, steps=steps_per_seg))
+
+    # --- Phase 3 & 4: Lower to target ---
+    is_block_target = target_name and target_name != "home"
+    if is_block_target:
+        pre_grasp = make_pre_grasp(target)
+        pre_grasp["gripper"] = gripper_val
+        trajectory.extend(make_motion_steps(raised_end, pre_grasp, steps=steps_per_seg))
+        # Phase 4: final descent
+        trajectory.extend(make_motion_steps(pre_grasp, target, steps=steps_per_seg))
+    else:
+        trajectory.extend(make_motion_steps(raised_end, target, steps=steps_per_seg))
+
     return trajectory
 
 
@@ -293,8 +365,10 @@ def main():
                     # Interrupt any in-progress motion and start fresh
                     current = get_current_joints(model, data)
                     motion_queue.clear()
-                    motion_queue.extend(make_motion_steps(current, joints))
                     label = block if block else "home"
+                    motion_queue.extend(
+                        make_safe_trajectory(current, joints, target_name=label)
+                    )
                     print(f"Moving to '{label}' ({len(motion_queue)} steps)")
 
             # Apply next motion step if queued
